@@ -1,0 +1,324 @@
+---
+title: "course_project"
+output: html_document
+---
+
+
+```{r, echo=FALSE}
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, 
+                      
+                      fig.height = 8,
+                      
+                      fig.width = 8) 
+
+```
+
+
+### Loading packages and reading the data
+
+```{r}
+
+library(tidyverse) # for data analysis and visualization
+
+library(caret) # for machine learning models
+
+library(knitr) # for creating tables
+
+dat<-read.csv("D:/R/coursera/machinelearning/pml-training.csv")
+
+
+```
+
+### Exploring the train data
+
+```{r}
+
+glimpse(dat)
+
+head(dat)
+
+tail(dat)
+
+
+```
+
+The data is composed of 19,622 rows and 160 columns.
+
+Some columns are numeric and some are character or categorical.
+
+### Character columns
+
+```{r}
+
+dat_cat<-dat %>% select_if(is.character)
+
+dim(dat_cat)
+
+sapply(dat_cat,class)
+
+x<-nearZeroVar(dat_cat, names = T)
+
+x
+
+dat_cat2<-dat_cat %>% select(-all_of(x))
+
+head(dat_cat2)
+
+
+
+```
+
+There are 37 categorical columns. After removing near zero variance columns, only 3 columns remain, of which, the classe column is our outcome and the other 2 columns are not important as predictors, the user name and the time stamp.
+
+### Numeric columns
+
+```{r}
+
+dat_num<-dat %>% select(-all_of(names(dat_cat)))
+
+dim(dat_num)
+
+sapply(dat_num,class)
+
+x<-nearZeroVar(dat_num, names = T)
+
+x
+
+dat_num2<-dat_num %>% select(-all_of(x))
+
+head(dat_num2)
+
+dat_num3<-dat_num2 %>% select(-1)
+
+head(dat_num3)
+
+
+```
+
+There are 123 numerical columns. After removing near zero variance columns, only 97 columns remain, of which the X or serial number is not an important predictor so we removed it.
+
+The remaining numerical columns are 96 only.
+
+### Combine categorical (classe or outcome) and numerical columns
+
+```{r}
+
+
+dat_full<-bind_cols(classe = dat_cat2[,3], dat_num3)
+
+head(dat_full)
+
+dim(dat_full)
+
+
+```
+
+Now, the data is composed of 1 outcome column (classe) and 96 numerical predictors. 
+
+### Select important columns by doing one-way ANOVA
+
+```{r}
+
+# gather all columns except the classe column
+
+dat_full2<-dat_full %>% 
+  
+  tidyr::gather(key = "variable",value = "value", 2:97)
+
+head(dat_full2)
+
+dim(dat_full2)
+
+# do ANOVA and filter for significant variables
+
+library(rstatix)
+
+dat_res<-dat_full2 %>% group_by(variable) %>%
+    
+    anova_test(value ~ classe) %>% dplyr::filter(p<0.05)
+
+dim(dat_res)
+
+dat_res %>% kable(align = "c", digits = 2)
+
+# select these important columns from the original data
+
+dat_full3<-dat_full %>% dplyr::select(all_of(dat_res$variable), classe)
+
+
+dim(dat_full3)
+
+
+```
+
+There are 77 important numerical columns according to ANOVA test.
+
+Now, the data is composed of 1 outcome column (classe) and 77 numerical predictors. 
+
+
+### Remove columns with missing values
+
+```{r}
+
+library(naniar) # for seeing missing data
+
+# filter for columns with no missing values
+
+names<-miss_var_summary(dat_full3) %>% dplyr::filter(n_miss==0)
+
+head(names)
+
+# select the columns with no missing values
+
+dat_full4<-dat_full3 %>% dplyr::select(all_of(names$variable))
+
+dim(dat_full4)
+
+head(dat_full4)
+
+
+```
+
+Now, the data is composed of 1 outcome column (classe) and 48 numerical predictors. 
+
+
+### Summary statistics of the numerical columns by the outcome
+
+```{r}
+
+library(knitr)
+
+dat_full4 %>% dplyr::group_by(classe) %>% 
+  
+  get_summary_stats(type = "common") %>% arrange(variable) %>%
+  
+  kable(align = "c", digits = 2)
+
+```
+
+There are great differences in the scales and summary statistics of the 48 numerical columns.
+
+### Visualizing the relation between numerical columns and the outcome
+
+```{r}
+
+# gather all columns except the classe column
+
+dat_full5<-dat_full4 %>% 
+  
+  tidyr::gather(key = "variable",value = "value", 1:48)
+
+head(dat_full5)
+
+
+ggplot(data = dat_full5, aes(x = classe, y = value, col = classe))+
+  
+  geom_boxplot(show.legend = F)+ 
+  
+  facet_wrap(~variable, scales = "free", ncol = 5)+
+  
+  theme(strip.text.x = element_text(size = 8))+
+  
+  coord_flip() + theme_bw()
+
+```
+
+# Split the training data randomly to train and test data
+
+
+```{r}
+
+set.seed(123)
+
+split_data<-createDataPartition(y=dat_full4$classe, p= 0.75, list = F)
+
+train_data<-dat_full4[split_data,]
+
+val_data<-dat_full4[-split_data,]
+
+dim(train_data)
+
+dim(val_data)
+
+```
+
+The train data composed of 14,718 rows and test data (val_data) composed of 4,904 rows.
+
+### Scaling all columns
+
+```{r}
+
+# read original testing data
+
+dat_test<-read.csv("D:/R/coursera/machinelearning/pml-testing.csv")
+
+names(dat_test)
+
+# select important columns
+
+dat_test2<-dat_test %>% dplyr::select(all_of(names(dat_full4)[-49]))
+
+sum(is.na(dat_test2))
+
+pre<-preProcess(train_data[,-49], method = c("center", "scale"))
+
+dat_train<-predict(pre,train_data)
+
+dat_train %>% get_summary_stats(type = "mean_sd")
+
+dat_val<-predict(pre,val_data)
+
+dat_val %>% get_summary_stats(type = "mean_sd")
+
+dat_test3<-predict(pre, dat_test2) 
+
+dat_test3 %>% get_summary_stats(type = "mean_sd")
+
+
+```
+
+After scaling, all data have nearly a mean of 0 and standard deviation of 1.
+
+To avoid overfitting of random forest, we use the cross-validation to control the model building.
+
+We create 10 different folds. VerboseIter argument tracks the progress of model building.
+
+```{r}
+
+library(randomForest)
+
+set.seed(123)
+
+mod_rf<-train(classe~., method="rf", data = dat_train,
+              
+              trControl = trainControl(method = "cv", 
+                                       
+                                       number = 10, verboseIter = T))
+
+mod_rf
+
+
+```
+
+The model produced very high accuracy on the training part of the training data = 0.998.
+
+#### Confusion matrix
+
+```{r}
+
+dat_val$classe<-factor(dat_val$classe)
+
+pred_test<- predict(mod_rf, dat_val)
+
+confusionMatrix(data = pred_test, reference = dat_val$classe)
+
+#pred_test_20<- predict(mod_rf, dat_test3)
+
+#pred_test_20
+
+```
+
+The expected out of sample error is nearly zero for the test data that is part of the train data.
+
+
